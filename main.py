@@ -4,184 +4,118 @@ from streamlit_folium import st_folium
 import osmnx as ox
 import pandas as pd
 from datetime import datetime
+from streamlit_searchbox import st_searchbox
 
-# Importações dos módulos internos
+# Importações dos seus módulos internos
 from src.engine.dijkstra import RouteEngine
 from src.maps.geocoder import Geocodificador
 from src.export.share import gerar_link_google_maps, gerar_qr_code
 from src.export.pdf_gen import gerar_pdf_manifesto
 from src.ui.styles import aplicar_estilos_customizados
 
-# 1. Configuração Inicial e Estética
-st.set_page_config(
-    page_title="RotasWizard - Logística Inteligente",
-    page_icon="🚚",
-    layout="wide"
-)
-
-# Aplica o CSS customizado para o modo Dark e tabelas
+st.set_page_config(page_title="RotasWizard - Debug Mode", page_icon="🚚", layout="wide")
 aplicar_estilos_customizados()
 
-# Inicialização do estado para paradas dinâmicas
 if 'paradas' not in st.session_state:
     st.session_state.paradas = []
 
-# Inicialização dos motores técnicos
 engine = RouteEngine()
 geo = Geocodificador()
 
-# --- BARRA LATERAL: CONFIGURAÇÕES ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.title("⚙️ Painel de Controle")
-    st.subheader("Configurações do Veículo")
-    preco_comb = st.number_input("Preço do Combustível (R$)", value=5.85, step=0.01)
+    st.title("⚙️ Configurações")
+    preco_comb = st.number_input("Preço Combustível (R$)", value=5.85, step=0.01)
     cons_urbano = st.number_input("Consumo Urbano (km/L)", value=8.5, step=0.1)
     cons_pista = st.number_input("Consumo Rodoviário (km/L)", value=12.5, step=0.1)
-    
-    st.divider()
-    st.subheader("Estratégia de Cálculo")
-    modo_selecionado = st.selectbox(
-        "Modo Ativo", 
-        options=["economico", "rapido", "equilibrado"],
-        index=0,
-        format_func=lambda x: x.capitalize()
-    )
-    st.caption("Ajuste os valores de consumo para que o algoritmo Dijkstra calcule o custo real por trecho.")
+    modo_selecionado = st.selectbox("Estratégia", ["economico", "rapido", "equilibrado"])
 
-# --- COLUNA PRINCIPAL: ENTRADA DE DADOS ---
 st.title("🚚 RotasWizard: Inteligência Logística")
+col_in, col_out = st.columns([1, 2])
 
-col_input, col_output = st.columns([1, 2])
-
-with col_input:
-    st.markdown("### 📍 Itinerário de Entrega")
+with col_in:
+    st.subheader("📍 Itinerário")
+    origem_txt = st_searchbox(geo.buscar_sugestoes, key="search_origem", placeholder="Origem...")
     
-    origem_txt = st.text_input("Ponto de Partida", placeholder="Ex: Av. Paulista, 1000, SP")
-    
-    # Gerenciamento de Paradas Dinâmicas
-    st.write("**Paradas Intermediárias**")
     for i in range(len(st.session_state.paradas)):
-        st.session_state.paradas[i] = st.text_input(
-            f"Parada {i+1}", 
-            value=st.session_state.paradas[i], 
-            key=f"input_stop_{i}"
-        )
+        st.session_state.paradas[i] = st_searchbox(geo.buscar_sugestoes, key=f"search_stop_{i}", placeholder=f"Parada {i+1}...")
     
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("➕ Add Parada", use_container_width=True):
-            st.session_state.paradas.append("")
-            st.rerun()
-    with c2:
-        if st.button("➖ Remover", use_container_width=True) and st.session_state.paradas:
-            st.session_state.paradas.pop()
-            st.rerun()
+    if st.button("➕ Add Parada"):
+        st.session_state.paradas.append("")
+        st.rerun()
             
-    destino_txt = st.text_input("Destino Final", placeholder="Ex: Porto de Santos, SP")
-    
-    btn_calcular = st.button("🚀 Calcular Melhor Rota Financeira", use_container_width=True, type="primary")
+    destino_txt = st_searchbox(geo.buscar_sugestoes, key="search_destino", placeholder="Destino Final...")
+    btn_calc = st.button("🚀 Calcular Rota", use_container_width=True, type="primary")
 
-# --- LÓGICA DE PROCESSAMENTO ---
-if btn_calcular:
+# --- BLOCO DE DEBUG E PROCESSAMENTO ---
+if btn_calc:
+    print("\n" + "="*50)
+    print("🚀 INICIANDO DEBUG DE CÁLCULO")
+    
     if origem_txt and destino_txt:
-        with st.spinner("Otimizando custos e analisando vias..."):
-            # 1. Preparação da lista de locais
-            itinerario = [origem_txt] + [p for p in st.session_state.paradas if p] + [destino_txt]
+        itinerario = [origem_txt] + [p for p in st.session_state.paradas if p] + [destino_txt]
+        print(f"📍 Itinerário Selecionado: {itinerario}")
+        
+        with st.spinner("Geocodificando endereços..."):
+            coords = []
+            for local in itinerario:
+                c = geo.buscar_coordenadas(local)
+                print(f"🔍 Buscando Coordenadas para '{local}': {c}")
+                if c: coords.append(c)
             
-            # 2. Geocodificação
-            coords = [geo.buscar_coordenadas(local) for local in itinerario]
-            coords = [c for c in coords if c is not None]
-            
-            if len(coords) >= 2:
+            if len(coords) == len(itinerario):
+                print(f"✅ Todas as coordenadas obtidas: {coords}")
                 try:
-                    # Configurações do usuário para o algoritmo
-                    config_user = {
-                        'preco_combustivel': preco_comb,
-                        'consumo_urbano': cons_urbano,
-                        'consumo_pista': cons_pista
-                    }
-
-                    # 3. Download do Mapa (Bounding box ao redor dos pontos)
+                    # Carregamento do Mapa (Aumentado para 20km para evitar erro de borda)
+                    print("🗺️ Baixando grafo das ruas (isso pode demorar)...")
                     G = ox.graph_from_point(coords[0], dist=20000, network_type='drive')
                     G = ox.add_edge_speeds(G)
                     G = ox.add_edge_travel_times(G)
+                    print("✅ Grafo carregado com sucesso.")
 
-                    # 4. Cálculo Comparativo para a Tabela de UX
-                    resumo_comparativo = []
+                    config = {'preco_combustivel': preco_comb, 'consumo_urbano': cons_urbano, 'consumo_pista': cons_pista}
+                    
+                    resumo = []
                     for m in ["economico", "rapido", "equilibrado"]:
                         dist_m = 0
                         tempo_s = 0
-                        rota_temp_nodes = []
+                        rota_final_nodes = []
                         
                         for j in range(len(coords) - 1):
                             n1 = ox.nearest_nodes(G, coords[j][1], coords[j][0])
                             n2 = ox.nearest_nodes(G, coords[j+1][1], coords[j+1][0])
-                            seg = engine.encontrar_melhor_rota(G, n1, n2, m, config_user)
+                            print(f"🛣️ Calculando segmento {j+1}: Nó {n1} para Nó {n2} ({m})")
                             
-                            # Acumula dados para o resumo
-                            dist_m += sum(ox.utils_graph.get_route_edge_attributes(G, seg, 'length'))
-                            tempo_s += sum(ox.utils_graph.get_route_edge_attributes(G, seg, 'travel_time'))
+                            seg = engine.encontrar_melhor_rota(G, n1, n2, m, config)
+                            
+                            # CORREÇÃO OSMNX VERSÃO NOVA:
+                            edges_data = ox.routing.route_to_gdf(G, seg)
+                            dist_m += edges_data['length'].sum()
+                            tempo_s += edges_data['travel_time'].sum()
+                            
                             if m == modo_selecionado:
-                                if j == 0: rota_temp_nodes.extend(seg)
-                                else: rota_temp_nodes.extend(seg[1:])
+                                if j == 0: rota_final_nodes.extend(seg)
+                                else: rota_final_nodes.extend(seg[1:])
 
-                        d_km = dist_m / 1000
-                        # Estimativa de custo baseada no peso do modo
-                        cons_base = cons_pista if m == "economico" else cons_urbano
-                        custo_estimado = (d_km / cons_base) * preco_comb
+                        km = dist_m / 1000
+                        custo = (km / ((cons_urbano + cons_pista)/2)) * preco_comb
+                        resumo.append({"Perfil": m.capitalize(), "KM": f"{km:.2f}", "Custo": f"R$ {custo:.2f}"})
                         
-                        resumo_comparativo.append({
-                            "Perfil": "🌿 Econômico" if m == "economico" else "⚡ Rápido" if m == "rapido" else "⚖️ Equilibrado",
-                            "Distância": f"{d_km:.2f} km",
-                            "Custo Est.": f"R$ {custo_estimado:.2f}",
-                            "Tempo": f"{int(tempo_s/60)} min"
-                        })
-                        
-                        if m == modo_selecionado:
-                            rota_final_nodes = rota_temp_nodes
-                            distancia_final_km = d_km
-                            custo_final_rs = custo_estimado
+                        if m == modo_selecionado: 
+                            d_final, c_final, nodes_plot = km, custo, rota_final_nodes
 
-                    # 5. Exibição dos Resultados (Coluna Direita)
-                    with col_output:
-                        st.subheader("📊 Matriz de Decisão Logística")
-                        df_comp = pd.DataFrame(resumo_comparativo)
-                        st.table(df_comp)
-                        
-                        m1, m2 = st.columns(2)
-                        m1.metric("Distância Total", f"{distancia_final_km:.2f} km")
-                        m2.metric("Custo da Rota Ativa", f"R$ {custo_final_rs:.2f}")
-
-                        # Renderização do Mapa
-                        st.write("**Visualização do Trajeto Selecionado**")
-                        mapa_f = ox.plot_route_folium(G, rota_final_nodes, color='#FFA500', weight=5)
-                        st_folium(mapa_f, width=800, height=450)
-
-                        # --- SEÇÃO DE EXPORTAÇÃO ---
-                        st.divider()
-                        exp1, exp2, exp3 = st.columns([1.5, 1.5, 1])
-                        
-                        with exp1:
-                            link_maps = gerar_link_google_maps(itinerario)
-                            st.link_button("🌐 Abrir no Google Maps", link_maps, use_container_width=True)
-                            
-                        with exp2:
-                            pdf_data = gerar_pdf_manifesto(itinerario, distancia_final_km, custo_final_rs, modo_selecionado)
-                            st.download_button(
-                                label="📄 Baixar PDF para Assinatura",
-                                data=pdf_data,
-                                file_name=f"itinerario_{datetime.now().strftime('%H%M%S')}.pdf",
-                                mime="application/pdf",
-                                use_container_width=True
-                            )
-                        
-                        with exp3:
-                            qr_img = gerar_qr_code(link_maps)
-                            st.image(qr_img, caption="Scan para GPS", width=120)
+                    with col_out:
+                        st.table(pd.DataFrame(resumo))
+                        st.metric("Custo Total", f"R$ {c_final:.2f}")
+                        st_folium(ox.plot_route_folium(G, nodes_plot, color='orange'), width=750)
+                        print("✨ Rota renderizada com sucesso.")
 
                 except Exception as e:
-                    st.error(f"Erro no processamento: {e}")
+                    print(f"❌ ERRO NO MOTOR: {e}")
+                    st.error(f"Erro no processamento geográfico: {e}")
             else:
-                st.error("Por favor, informe pelo menos dois endereços válidos.")
+                print(f"⚠️ FALHA: Obtidas {len(coords)} de {len(itinerario)} coordenadas.")
+                st.error("Endereços não localizados. Tente selecionar novamente nas sugestões.")
     else:
-        st.warning("Preencha a origem e o destino para começar.")
+        st.warning("Preencha origem e destino.")
+    print("="*50 + "\n")

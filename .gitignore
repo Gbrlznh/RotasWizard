@@ -1,4 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
 venv/
 .env
-__pycache__/
-*.pdf
+
+# Mapas e Dados
+.openstreetmap_cache/
+data/*.pdf
+
+# Editor
+.vscode/
